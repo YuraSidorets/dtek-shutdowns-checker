@@ -1,6 +1,7 @@
 import { time, kyivDate, stateBetween, compareDay, readAddresses } from './overlap.mjs';
 import { API_BASE } from './config.mjs';
 import streets from './streets.mjs';
+import { createHouseLookup } from './house-lookup.mjs';
 
 const $ = id => document.getElementById(id);
 const labels = { on: 'On', off: 'Off', unknown: 'Unknown' };
@@ -16,6 +17,11 @@ function el(tag, className, text) {
   if (className) node.className = className;
   if (text !== undefined) node.textContent = text;
   return node;
+}
+function setHouseOptions(control, houses, selected = '') {
+  const placeholder = el('option', '', 'No.'); placeholder.value = '';
+  control.replaceChildren(placeholder, ...houses.map(value => { const option = el('option', '', value); option.value = value; return option; }));
+  control.value = selected;
 }
 function message(text) { $('form-message').textContent = text; $('form-message').hidden = !text; }
 function save() {
@@ -36,6 +42,7 @@ function invalidate() {
   message('Addresses changed. Check again to update the schedules.'); render();
 }
 function setBusy(value) { busy = value; for (const id of ['check', 'samples', 'forget']) $(id).disabled = value; $('check').textContent = value ? 'Checking DTEK…' : 'Find shared time ↗'; $('address-form').setAttribute('aria-busy', String(value)); }
+const housesForStreet = createHouseLookup(street => api('/api/houses', { street }));
 
 for (let i = 0; i < 3; i++) {
   const group = el('fieldset', 'friend');
@@ -43,8 +50,10 @@ for (let i = 0; i < 3; i++) {
   const inputs = {};
   function input(key, label, placeholder, required, list) {
     const field = el('label', `field ${key === 'name' ? 'name-field' : ''}`, label);
-    const control = el('input');
-    control.id = `${key}-${i}`; control.name = `${key}-${i}`; control.placeholder = placeholder; control.value = addresses[i][key]; control.required = required; control.autocomplete = 'off'; control.maxLength = key === 'name' ? 60 : key === 'street' ? 200 : 30;
+    const control = el(key === 'house' ? 'select' : 'input');
+    control.id = `${key}-${i}`; control.name = `${key}-${i}`; control.required = required;
+    if (key === 'house') setHouseOptions(control, addresses[i].house ? [addresses[i].house] : [], addresses[i].house);
+    else { control.placeholder = placeholder; control.value = addresses[i][key]; control.autocomplete = 'off'; control.maxLength = 200; }
     control.setAttribute('aria-label', `Address ${i + 1} ${label}`);
     if (list) control.setAttribute('list', `${key}-list-${i}`);
     control.addEventListener('input', () => { addresses[i][key] = control.value; if (key === 'street') { addresses[i].house = ''; inputs.house.value = ''; } save(); invalidate(); });
@@ -53,12 +62,38 @@ for (let i = 0; i < 3; i++) {
   const addressFields = el('div', 'address-fields');
   addressFields.append(input('street', 'Street', 'Start typing in Ukrainian', true, true), input('house', 'Building', 'No.', true, false));
   group.append(addressFields);
-  const streetList = el('datalist');
-  streetList.id = `street-list-${i}`; group.append(streetList);
+  const streetList = el('datalist'), houseStatus = el('p', 'house-status');
+  streetList.id = `street-list-${i}`; houseStatus.id = `house-status-${i}`;
+  houseStatus.setAttribute('role', 'status'); houseStatus.setAttribute('aria-live', 'polite');
+  inputs.house.setAttribute('aria-describedby', houseStatus.id);
+  group.append(streetList, houseStatus);
   inputs.street.addEventListener('input', () => {
+    setHouseOptions(inputs.house, []); delete inputs.house.dataset.street; houseStatus.textContent = ''; inputs.house.removeAttribute('aria-busy');
     const q = inputs.street.value.trim().toLocaleLowerCase('uk');
     streetList.replaceChildren(...(q.length < 2 ? [] : streets.filter(street => street.toLocaleLowerCase('uk').includes(q)).slice(0, 40)).map(value => { const option = el('option'); option.value = value; return option; }));
   });
+  async function loadHouses() {
+    const street = inputs.street.value.trim();
+    if (!street) return;
+    if (!streets.includes(street)) { houseStatus.textContent = 'Select a street from the suggestions first.'; return; }
+    if (inputs.house.dataset.street === street) return;
+    inputs.house.setAttribute('aria-busy', 'true'); houseStatus.textContent = 'Loading buildings…';
+    try {
+      const houses = await housesForStreet(street);
+      if (inputs.street.value.trim() !== street) return;
+      const selected = houses.includes(addresses[i].house) ? addresses[i].house : '';
+      setHouseOptions(inputs.house, houses, selected);
+      inputs.house.dataset.street = street;
+      if (addresses[i].house !== selected) { addresses[i].house = selected; save(); invalidate(); }
+      houseStatus.textContent = houses.length ? '' : 'No buildings listed for this street.';
+    } catch (error) {
+      if (inputs.street.value.trim() === street) houseStatus.textContent = error.name === 'TimeoutError' ? 'Building lookup took too long. Focus the field to retry.' : error.message;
+    } finally {
+      if (inputs.street.value.trim() === street) inputs.house.removeAttribute('aria-busy');
+    }
+  }
+  inputs.street.addEventListener('change', loadHouses);
+  inputs.house.addEventListener('focus', loadHouses);
   fields.push(inputs); $('friends').append(group);
 }
 
@@ -151,12 +186,19 @@ $('address-form').addEventListener('submit', e => { e.preventDefault(); check();
 $('forget').addEventListener('click', () => {
   generation++; try { localStorage.removeItem(storageKey); } catch { /* Storage can be disabled. */ }
   addresses = Array.from({ length: 3 }, () => ({ name: '', street: '', house: '' }));
-  fields.forEach(group => Object.values(group).forEach(input => { input.value = ''; })); schedules = [null, null, null]; errors = ['', '', '']; message('Saved addresses cleared.'); render();
+  fields.forEach((group, i) => {
+    Object.values(group).forEach(input => { input.value = ''; });
+    group.house.removeAttribute('aria-busy'); delete group.house.dataset.street; setHouseOptions(group.house, []); $(`house-status-${i}`).textContent = '';
+  }); schedules = [null, null, null]; errors = ['', '', '']; message('Saved addresses cleared.'); render();
 });
 $('samples').addEventListener('click', async () => {
   if (busy) return;
   addresses = ['вул. Хрещатик', 'вул. Саксаганського', 'вул. Ревуцького'].map(street => ({ name: '', street, house: '1' }));
-  fields.forEach((group, i) => { for (const key of ['street', 'house']) group[key].value = addresses[i][key]; });
+  fields.forEach((group, i) => {
+    group.street.value = addresses[i].street;
+    setHouseOptions(group.house, [addresses[i].house], addresses[i].house);
+    group.house.removeAttribute('aria-busy'); delete group.house.dataset.street; $(`house-status-${i}`).textContent = '';
+  });
   save(); invalidate(); await check();
 });
 render();

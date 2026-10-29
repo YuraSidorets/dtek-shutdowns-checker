@@ -14,20 +14,23 @@ function isTopLevelNavigation(response, page) {
 }
 
 function responseLike(status, body, contentType) {
-  return new Response(body, {
-    status,
-    headers: { "content-type": contentType },
-  });
+  return new Response(body, { status, headers: { "content-type": contentType } });
 }
 
-export async function createBrowserFetch(binding, puppeteerApi = puppeteer) {
-  let stage = "launch";
+export async function createBrowserFetch(binding, puppeteerApi = puppeteer, { sessionId, onSession } = {}) {
+  let stage = sessionId ? "session connection" : "launch";
   let browser;
-  let page;
+  let context;
+  const launched = !sessionId;
   try {
-    browser = await puppeteerApi.launch(binding);
+    browser = sessionId
+      ? await puppeteerApi.connect(binding, sessionId)
+      : await puppeteerApi.launch(binding, { keep_alive: 30_000 });
+    const activeSessionId = sessionId ?? browser.sessionId();
+    if (launched) await onSession?.(activeSessionId);
     stage = "page creation";
-    page = await browser.newPage();
+    context = await browser.createBrowserContext();
+    const page = await context.newPage();
     stage = "DTEK navigation";
     let pageStatus;
     let topLevelResponseSeen = false;
@@ -81,10 +84,18 @@ export async function createBrowserFetch(binding, puppeteerApi = puppeteer) {
 
     return {
       fetch: fetchImpl,
-      close: () => browser.close(),
+      sessionId: activeSessionId,
+      async close() {
+        try { await context.close(); }
+        finally { await browser.disconnect(); }
+      },
     };
   } catch (error) {
-    try { await browser?.close(); } catch { /* preserve the setup failure */ }
+    try { await context?.close(); } catch { /* preserve the setup failure */ }
+    try {
+      if (launched) await browser?.close();
+      else await browser?.disconnect();
+    } catch { /* preserve the setup failure */ }
     const failure = new Error(`Browser ${stage} failed.`, { cause: error });
     failure.stage = stage;
     throw failure;

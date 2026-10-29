@@ -4,7 +4,7 @@ import { runInNewContext } from "node:vm";
 import { createBrowserFetch } from "../src/browser.mjs";
 
 function fakePuppeteer({ navigationError, navigationStatus = 200, onGotoResponse } = {}) {
-  const calls = { goto: [], evaluate: [], ready: [], closed: 0 };
+  const calls = { goto: [], evaluate: [], ready: [], closed: 0, disconnected: 0, contextClosed: 0, launchOptions: [] };
   const mainFrame = {};
   const listeners = new Map();
   const page = {
@@ -29,9 +29,22 @@ function fakePuppeteer({ navigationError, navigationStatus = 200, onGotoResponse
       return { status: 200, contentType: "application/json", body: JSON.stringify({ result: true }) };
     },
   };
+  const context = {
+    async newPage() { return page; },
+    async close() { calls.contextClosed++; },
+  };
+  const browser = {
+    sessionId() { return "app-session"; },
+    async createBrowserContext() { return context; },
+    async close() { calls.closed++; },
+    async disconnect() { calls.disconnected++; },
+  };
   return {
     calls,
-    api: { async launch() { return { async newPage() { return page; }, async close() { calls.closed++; } }; } },
+    api: {
+      async launch(_binding, options) { calls.launchOptions.push(options); return browser; },
+      async connect(_binding, sessionId) { calls.connectId = sessionId; return browser; },
+    },
   };
 }
 
@@ -41,6 +54,7 @@ test("browser transport loads only DTEK and sends AJAX in the browser context", 
   try {
     assert.equal(fake.calls.goto[0][0], "https://www.dtek-kem.com.ua/ua/shutdowns");
     assert.equal(fake.calls.goto[0][1].waitUntil, "networkidle2");
+    assert.equal(fake.calls.launchOptions[0].keep_alive, 30_000);
     assert.equal(fake.calls.ready.length, 1);
     assert.deepEqual(fake.calls.ready[0][1], { timeout: 5_000 });
     const ready = fake.calls.ready[0][0];
@@ -61,7 +75,8 @@ test("browser transport loads only DTEK and sends AJAX in the browser context", 
       "x-csrf-token": "token",
     });
   } finally { await session.close(); }
-  assert.equal(fake.calls.closed, 1);
+  assert.equal(fake.calls.contextClosed, 1);
+  assert.equal(fake.calls.disconnected, 1);
 });
 
 test("browser transport keeps the latest top-level response when goto returns a stale status", async () => {
@@ -91,4 +106,17 @@ test("browser transport rejects arbitrary destinations and closes after navigati
   const broken = fakePuppeteer({ navigationError: new Error("navigation failed") });
   await assert.rejects(() => createBrowserFetch({}, broken.api), /navigation failed/);
   assert.equal(broken.calls.closed, 1);
+});
+
+test("browser transport reconnects only to its supplied app session and isolates each request context", async () => {
+  const fake = fakePuppeteer();
+  const session = await createBrowserFetch({}, fake.api, { sessionId: "app-session" });
+  try {
+    assert.equal(fake.calls.connectId, "app-session");
+    assert.equal(fake.calls.launchOptions.length, 0);
+    assert.equal(session.sessionId, "app-session");
+  } finally { await session.close(); }
+  assert.equal(fake.calls.contextClosed, 1);
+  assert.equal(fake.calls.disconnected, 1);
+  assert.equal(fake.calls.closed, 0);
 });

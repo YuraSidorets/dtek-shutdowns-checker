@@ -5,3 +5,5 @@
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 .friend legend{float:none;width:auto;padding:0}.address-fields{clear:both;width:100%}
 .sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
+.house-status{margin:7px 0 0;font-size:12px;color:var(--muted);overflow-wrap:anywhere}.house-status:empty{display:none}
+.field select{width:100%;height:42px;border:1px solid #cfdbe6;border-radius:8px;color:var(--ink);background:#fcfdff;padding:9px 8px;margin-top:3px;font-size:14px;min-width:0}

@@ -1,7 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "dtek-shutdowns-checker-lookup-20261029",
-  "main": "src/service.mjs",
+  "main": "src/worker.mjs",
   "compatibility_date": "2026-10-29",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
@@ -10,5 +10,13 @@
   },
   "browser": {
     "binding": "BROWSER"
-  }
+  },
+  "durable_objects": {
+    "bindings": [
+      { "name": "BROWSER_SESSIONS", "class_name": "BrowserSessionCoordinator" }
+    ]
+  },
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["BrowserSessionCoordinator"] }
+  ]
 }
