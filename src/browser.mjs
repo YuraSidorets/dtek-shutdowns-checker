@@ -2,6 +2,16 @@ import puppeteer from "@cloudflare/puppeteer";
 
 const PAGE_URL = "https://www.dtek-kem.com.ua/ua/shutdowns";
 const AJAX_URL = "https://www.dtek-kem.com.ua/ua/ajax";
+const APP_READY_TIMEOUT_MS = 5_000;
+
+function isTopLevelNavigation(response, page) {
+  try {
+    const request = response.request();
+    return request.isNavigationRequest() && response.frame() === page.mainFrame();
+  } catch {
+    return false;
+  }
+}
 
 function responseLike(status, body, contentType) {
   return new Response(body, {
@@ -19,8 +29,25 @@ export async function createBrowserFetch(binding, puppeteerApi = puppeteer) {
     stage = "page creation";
     page = await browser.newPage();
     stage = "DTEK navigation";
+    let pageStatus;
+    let topLevelResponseSeen = false;
+    page.on("response", (response) => {
+      if (isTopLevelNavigation(response, page)) {
+        pageStatus = response.status();
+        topLevelResponseSeen = true;
+      }
+    });
     const navigation = await page.goto(PAGE_URL, { waitUntil: "networkidle2", timeout: 20_000 });
-    const pageStatus = navigation?.status() ?? 200;
+    if (!topLevelResponseSeen) pageStatus = navigation?.status() ?? 200;
+    try {
+      await page.waitForFunction(() => {
+        const html = document.documentElement?.innerHTML ?? "";
+        return ["streets", "preset", "fact"].every((field) => html.includes(`DisconSchedule.${field} =`));
+      }, { timeout: APP_READY_TIMEOUT_MS });
+    } catch (error) {
+      // The normal bootstrap parser handles pages that never become ready.
+      if (error?.name !== "TimeoutError" && !/timeout/i.test(error?.message ?? "")) throw error;
+    }
     let pageHtml;
 
     const fetchImpl = async (input, init = {}) => {
