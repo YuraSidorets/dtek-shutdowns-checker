@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { handleDtekRequest } from './src/dtek.mjs';
 
-const files = { '/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/app.mjs': ['app.mjs', 'text/javascript'], '/overlap.mjs': ['overlap.mjs', 'text/javascript'], '/config.mjs': ['config.mjs', 'text/javascript'] };
+const files = { '/': ['index.html', 'text/html'], '/style.css': ['style.css', 'text/css'], '/app.mjs': ['app.mjs', 'text/javascript'], '/overlap.mjs': ['overlap.mjs', 'text/javascript'], '/config.mjs': ['config.mjs', 'text/javascript'], '/streets.mjs': ['streets.mjs', 'text/javascript'] };
 const port = Number(process.env.PORT || 43187);
 createServer(async (req, res) => {
   try {

@@ -79,3 +79,12 @@ test("rejects disallowed preflight methods and headers", async () => {
   }));
   assert.equal(headers.status, 403);
 });
+
+test("does not launch a browser for unsupported routes or methods", async () => {
+  const route = await handleServiceRequest(new Request("https://lookup.workers.dev/nope"), { BROWSER: {} });
+  assert.equal(route.status, 404);
+  const method = await handleServiceRequest(new Request("https://lookup.workers.dev/api/streets", { method: "POST" }), { BROWSER: {} });
+  assert.equal(method.status, 405);
+  const invalidBatch = await handleServiceRequest(new Request("https://lookup.workers.dev/api/schedules?addresses=%5B%5D"), { BROWSER: {} });
+  assert.equal(invalidBatch.status, 400);
+});

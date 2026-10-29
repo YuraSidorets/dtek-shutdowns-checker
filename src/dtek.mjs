@@ -183,6 +183,29 @@ export function parseSchedule(fact, groups, now = new Date()) {
   return days;
 }
 
+export function parseScheduleAddresses(request) {
+  const url = new URL(request.url);
+  let addresses;
+  try { addresses = JSON.parse(url.searchParams.get("addresses") ?? ""); }
+  catch { return { error: "addresses must be a JSON array of three street and house pairs." }; }
+  if (!Array.isArray(addresses) || addresses.length !== 3) {
+    return { error: "Exactly three street and house pairs are required." };
+  }
+  const normalized = [];
+  for (const value of addresses) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return { error: "Each address must contain a street and house." };
+    }
+    const street = typeof value.street === "string" ? value.street.trim() : "";
+    const house = typeof value.house === "string" ? value.house.trim() : "";
+    if (!street || street.length > 200 || !house || house.length > 40) {
+      return { error: "Each address must contain a valid street and house." };
+    }
+    normalized.push({ street, house });
+  }
+  return { addresses: normalized };
+}
+
 function asObject(value, label) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new AdapterError(`DTEK ${label} response is malformed.`);
   return value;
@@ -259,10 +282,15 @@ async function upstreamAddress(fetchImpl, bootstrap, street, house = "") {
 export async function handleDtekRequest(request, session = {}) {
   const url = new URL(request.url);
   if (request.method !== "GET") return json({ error: "Only GET requests are supported." }, 405);
-  if (!["/api/streets", "/api/houses", "/api/schedule"].includes(url.pathname)) return json({ error: "Route not found." }, 404);
+  if (!["/api/streets", "/api/houses", "/api/schedule", "/api/schedules"].includes(url.pathname)) return json({ error: "Route not found." }, 404);
+
+  const batch = url.pathname === "/api/schedules"
+    ? (session.batchAddresses ? { addresses: session.batchAddresses } : parseScheduleAddresses(request))
+    : null;
+  if (batch?.error) return json({ error: batch.error }, 400);
 
   try {
-    const fetchImpl = globalThis.fetch;
+    const fetchImpl = session.fetchImpl ?? globalThis.fetch;
     const bootstrap = await upstreamGet(fetchImpl, session);
     if (url.pathname === "/api/streets") {
       const query = (url.searchParams.get("q") ?? "").trim().toLocaleLowerCase("uk");
@@ -273,11 +301,42 @@ export async function handleDtekRequest(request, session = {}) {
     }
 
     const street = (url.searchParams.get("street") ?? "").trim();
-    if (!street) return json({ error: "street is required." }, 400);
-    if (!bootstrap.streets.includes(street)) return json({ error: "Select a street from DTEK's suggestions." }, 404);
+    if (!batch) {
+      if (!street) return json({ error: "street is required." }, 400);
+      if (!bootstrap.streets.includes(street)) return json({ error: "Select a street from DTEK's suggestions." }, 404);
+    }
     if (url.pathname === "/api/houses") {
       const houses = await upstreamAddress(fetchImpl, bootstrap, street);
       return json({ houses: Object.keys(houses).filter((house) => house !== "-" && house !== ".") });
+    }
+
+    if (batch) {
+      const results = [];
+      for (const { street: addressStreet, house: addressHouse } of batch.addresses) {
+        try {
+          if (!bootstrap.streets.includes(addressStreet)) throw new AdapterError("Select a street from DTEK's suggestions.", 404);
+          const selectedHouses = await upstreamAddress(fetchImpl, bootstrap, addressStreet, addressHouse);
+          const address = selectedHouses[addressHouse];
+          if (!address) throw new AdapterError("Select a house from DTEK's suggestions.", 404);
+          results.push({
+            ok: true,
+            street: addressStreet,
+            house: addressHouse,
+            fetchedAt: new Date().toISOString(),
+            updatedAt: bootstrap.fact.update,
+            days: parseSchedule(bootstrap.fact, address.sub_type_reason),
+          });
+        } catch (error) {
+          results.push({
+            ok: false,
+            street: addressStreet,
+            house: addressHouse,
+            error: error instanceof Error ? error.message : "DTEK address lookup failed.",
+            status: error instanceof AdapterError ? error.status : 502,
+          });
+        }
+      }
+      return json({ results });
     }
 
     const house = (url.searchParams.get("house") ?? "").trim();

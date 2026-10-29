@@ -1,5 +1,6 @@
 import { time, kyivDate, stateBetween, compareDay, readAddresses } from './overlap.mjs';
 import { API_BASE } from './config.mjs';
+import streets from './streets.mjs';
 
 const $ = id => document.getElementById(id);
 const labels = { on: 'On', off: 'Off', unknown: 'Unknown' };
@@ -50,28 +51,14 @@ for (let i = 0; i < 3; i++) {
     field.append(control); inputs[key] = control; return field;
   }
   const addressFields = el('div', 'address-fields');
-  addressFields.append(input('street', 'Street', 'Start typing in Ukrainian', true, true), input('house', 'Building', 'No.', true, true));
+  addressFields.append(input('street', 'Street', 'Start typing in Ukrainian', true, true), input('house', 'Building', 'No.', true, false));
   group.append(addressFields);
-  const streetList = el('datalist'), houseList = el('datalist');
-  streetList.id = `street-list-${i}`; houseList.id = `house-list-${i}`; group.append(streetList, houseList);
-  let timer, suggestionId = 0;
+  const streetList = el('datalist');
+  streetList.id = `street-list-${i}`; group.append(streetList);
   inputs.street.addEventListener('input', () => {
-    clearTimeout(timer); const id = ++suggestionId; const q = inputs.street.value.trim();
-    streetList.replaceChildren(); houseList.replaceChildren();
-    if (q.length < 2) return;
-    timer = setTimeout(async () => {
-      try { const data = await api('/api/streets', { q }); if (id === suggestionId) streetList.replaceChildren(...data.streets.slice(0, 40).map(v => { const o = el('option'); o.value = v; return o; })); }
-      catch { if (id === suggestionId) message('Street suggestions are unavailable. You can enter the full Ukrainian street name and building, then try checking.'); }
-    }, 350);
+    const q = inputs.street.value.trim().toLocaleLowerCase('uk');
+    streetList.replaceChildren(...(q.length < 2 ? [] : streets.filter(street => street.toLocaleLowerCase('uk').includes(q)).slice(0, 40)).map(value => { const option = el('option'); option.value = value; return option; }));
   });
-  async function houses() {
-    const street = inputs.street.value.trim();
-    if (!street) return;
-    try { const data = await api('/api/houses', { street }); if (inputs.street.value.trim() === street) houseList.replaceChildren(...data.houses.map(v => { const o = el('option'); o.value = v; return o; })); }
-    catch { /* A lookup failure is reported when the user checks this address. */ }
-  }
-  inputs.street.addEventListener('change', houses);
-  inputs.house.addEventListener('focus', houses);
   fields.push(inputs); $('friends').append(group);
 }
 
@@ -143,15 +130,21 @@ async function check() {
   addresses = addresses.map(a => ({ name: a.name.trim(), street: a.street.trim(), house: a.house.trim() })); save();
   const version = ++generation; schedules = [null, null, null]; errors = ['', '', '']; setBusy(true); message('Fetching the latest published schedules from DTEK…'); render();
   try {
-    await Promise.all(addresses.map(async (a, i) => {
-      try {
-        const result = await api('/api/schedule', { street: a.street, house: a.house });
-        if (!Array.isArray(result.days) || !result.fetchedAt) throw new Error('DTEK returned an unsupported schedule.');
-        if (generation === version) schedules[i] = result;
-      } catch (error) { if (generation === version) errors[i] = error.name === 'TimeoutError' ? 'DTEK took too long to respond. Try again shortly.' : error.message; }
-      if (generation === version) render();
-    }));
+    const data = await api('/api/schedules', { addresses: JSON.stringify(addresses.map(({ street, house }) => ({ street, house }))) });
+    if (!Array.isArray(data.results) || data.results.length !== 3) throw new Error('DTEK returned an unsupported schedule.');
+    if (generation === version) {
+      data.results.forEach((result, i) => {
+        if (result.ok && Array.isArray(result.days) && result.fetchedAt) schedules[i] = result;
+        else errors[i] = result.error || 'This schedule is not available.';
+      });
+      render();
+    }
     if (generation === version) message(errors.some(Boolean) ? 'Some schedules could not be verified. Shared windows require all three. Please try again.' : '');
+  } catch (error) {
+    if (generation === version) {
+      const detail = error.name === 'TimeoutError' ? 'DTEK took too long to respond. Try again shortly.' : error.message;
+      errors = Array(3).fill(detail); message(detail); render();
+    }
   } finally { setBusy(false); }
 }
 $('address-form').addEventListener('submit', e => { e.preventDefault(); check(); });

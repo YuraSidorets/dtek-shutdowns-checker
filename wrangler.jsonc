@@ -3,8 +3,12 @@
   "name": "dtek-shutdowns-checker-lookup-20261029",
   "main": "src/service.mjs",
   "compatibility_date": "2026-10-29",
+  "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
   "observability": {
     "enabled": false
+  },
+  "browser": {
+    "binding": "BROWSER"
   }
 }

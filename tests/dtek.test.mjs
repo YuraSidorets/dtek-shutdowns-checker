@@ -126,6 +126,47 @@ test("returns house suggestions and a mapped schedule for a verified house", asy
   } finally { globalThis.fetch = originalFetch; }
 });
 
+test("returns three schedules from one bootstrap and preserves individual lookup failures", async () => {
+  const now = new Date();
+  const page = samplePage(todayFact({ "GPV1.1": groupsFor("yes") }, now));
+  const requests = [];
+  const fetchImpl = async (input, init = {}) => {
+    const url = String(input);
+    requests.push({ url, init });
+    if (!url.includes("/ua/ajax")) return new Response(page, { status: 200 });
+    const params = new URLSearchParams(init.body);
+    const house = params.get("data[1][value]");
+    return jsonResponse({ result: true, data: { "1": { sub_type_reason: ["GPV1.1"] } } });
+  };
+  const addresses = [
+    { street: "вул. Хрещатик", house: "1" },
+    { street: "вул. Саксаганського", house: "1" },
+    { street: "майдан Лесі Українки", house: "99" },
+  ];
+  const request = new Request(`https://local.test/api/schedules?addresses=${encodeURIComponent(JSON.stringify(addresses))}`);
+  const response = await handleDtekRequest(request, { fetchImpl });
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(requests.filter((item) => !item.url.includes("/ua/ajax")).length, 1);
+  assert.equal(requests.filter((item) => item.url.includes("/ua/ajax")).length, 3);
+  assert.deepEqual(body.results.map((result) => result.ok), [true, true, false]);
+  assert.deepEqual(body.results.slice(0, 2).map((result) => [result.street, result.house, result.days[0].slots[0].state]), [
+    ["вул. Хрещатик", "1", "on"],
+    ["вул. Саксаганського", "1", "on"],
+  ]);
+  assert.match(body.results[2].error, /house/i);
+  assert.equal(body.results[0].updatedAt, updateNow(now));
+});
+
+test("rejects invalid schedule batches before making upstream requests", async () => {
+  let calls = 0;
+  const response = await handleDtekRequest(new Request("https://local.test/api/schedules?addresses=%5B%5D"), {
+    fetchImpl: async () => { calls++; throw new Error("must not run"); },
+  });
+  assert.equal(response.status, 400);
+  assert.equal(calls, 0);
+});
+
 test("returns an actionable non-200 error when Incapsula blocks the upstream page", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response("Incapsula incident", { status: 403 });
