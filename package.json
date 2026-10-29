@@ -1,0 +1,11 @@
+{
+  "name": "kyiv-power-overlap",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs",
+    "test": "node --test",
+    "build": "node scripts/build.mjs"
+  },
+  "devDependencies": { "esbuild": "^0.25.12" }
+}

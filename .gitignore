@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.openai/*.tar.gz
+.openai/*.tgz
+.openai/workflow*
+tmp/
+.dev.vars*
+.env*
+.wrangler/
